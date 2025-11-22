@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 import openai
+from datetime import datetime
 
 # Add project root to Python path so we can import utils
 project_root = Path(__file__).parent.parent
@@ -14,6 +15,7 @@ from utils.json_parser import extract_json
 from utils.snippet_extractor import extract_snippet_from_lines, fallback_extract_snippet_from_pattern
 from utils.severity import calculate_safety_score, severity_to_score
 from utils.ai_providers import call_ai_provider
+from utils.pdf_generator import generate_pdf_report
 
 # Load environment variables
 load_dotenv()
@@ -33,13 +35,58 @@ except FileNotFoundError:
 st.title('MemSafe — C to Rust Safety Assistant')
 st.markdown('Analyze C code for memory safety vulnerabilities and get Rust-based solutions.')
 
-# Provider and model selection
-col1, col2 = st.columns([3, 1])
-with col1:
-    code_input = st.text_area('Paste C code here', height=300, placeholder='// Paste your C code here...')
-with col2:
-    st.markdown("**Settings**")
+# Education section (collapsible)
+with st.expander("📚 Why Rust is Safer?", expanded=False):
+    st.markdown("""
+    ### Memory Safety Guarantees
     
+    **Rust prevents entire classes of bugs at compile time:**
+    
+    - ✅ **No Buffer Overflows**: Rust's ownership system prevents out-of-bounds access
+    - ✅ **No Use-After-Free**: The borrow checker ensures memory is valid when used
+    - ✅ **No Null Pointer Dereferences**: Rust uses `Option<T>` instead of null pointers
+    - ✅ **No Data Races**: Rust's type system prevents concurrent data access bugs
+    - ✅ **Automatic Memory Management**: No manual `malloc`/`free` needed
+    
+    ### How Rust Achieves This
+    
+    1. **Ownership System**: Each value has a single owner, preventing dangling pointers
+    2. **Borrow Checker**: Analyzes code at compile time to ensure memory safety
+    3. **Type System**: Strong types prevent many common errors
+    4. **Zero-Cost Abstractions**: Safety without runtime overhead
+    
+    ### Real-World Impact
+    
+    - **70% of security vulnerabilities** in C/C++ are memory safety issues
+    - Rust eliminates these vulnerabilities **at compile time**
+    - Used in production by: Mozilla, Microsoft, Google, Amazon, and more
+    """)
+
+# Input method selection
+input_method = st.radio(
+    "Choose input method:",
+    ["📝 Paste Code", "📂 Upload File"],
+    horizontal=True
+)
+
+code_input = ""
+
+if input_method == "📂 Upload File":
+    uploaded_file = st.file_uploader("Upload a C file", type=['c', 'h', 'cpp', 'hpp'], help="Upload a .c, .h, .cpp, or .hpp file")
+    if uploaded_file is not None:
+        code_input = uploaded_file.read().decode('utf-8')
+        st.text_area('Uploaded Code Preview', code_input, height=200, disabled=True)
+    else:
+        st.info("👆 Please upload a C file above")
+else:
+    code_input = st.text_area('Paste C code here', height=300, placeholder='// Paste your C code here...')
+
+# Provider and model selection (always visible)
+st.markdown("---")
+st.markdown("**⚙️ Settings**")
+col1, col2 = st.columns(2)
+
+with col1:
     # Provider selection
     provider = st.selectbox(
         "AI Provider",
@@ -51,8 +98,8 @@ with col2:
     if provider == "Hugging Face (Currently Unavailable)":
         st.error("⚠️ Hugging Face API is currently unavailable (all models returning 410/404 errors).")
         st.info("💡 **Recommendation**: Use 'OpenAI (Free Tier Available!)' - new accounts get $5 free credits with no credit card required!")
-        st.markdown("---")
-    
+
+with col2:
     # Model selection based on provider
     if provider == "Hugging Face (Currently Unavailable)":
         st.info("⚠️ Note: Many HF models are currently unavailable. Using fallback approach.")
@@ -295,9 +342,33 @@ if st.button('Analyze', type='primary'):
                         if pattern:
                             st.caption(f"Attempted pattern: {pattern}")
         
-        # Display Suggested Rust Fixes
-        st.subheader('🦀 Suggested Rust Fixes')
+        # Before/After Comparison View
+        st.subheader('📊 Before/After Comparison')
         suggested_rust = parsed_data.get('suggested_rust', [])
+        
+        if suggested_rust and isinstance(suggested_rust, list) and len(suggested_rust) > 0:
+            # Combine all Rust fixes for comparison
+            combined_rust = "\n\n".join([
+                fix.get('rust_snippet', '') 
+                for fix in suggested_rust 
+                if isinstance(fix, dict) and fix.get('rust_snippet')
+            ])
+            
+            if combined_rust:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**🔴 Insecure C Code**")
+                    st.code(code_input, language='c')
+                with col2:
+                    st.markdown("**🟢 Safer Rust Alternative**")
+                    st.code(combined_rust, language='rust')
+            else:
+                st.info('Rust code suggestions will appear here after analysis.')
+        else:
+            st.info('No Rust suggestions available for comparison.')
+        
+        # Display Suggested Rust Fixes (Detailed)
+        st.subheader('🦀 Suggested Rust Fixes (Detailed)')
         
         if not suggested_rust:
             st.info('No Rust suggestions provided by the model.')
@@ -321,6 +392,23 @@ if st.button('Analyze', type='primary'):
                     if why_safe:
                         st.write(f"**Why it's safer:** {why_safe}")
                     st.divider()
+        
+        # PDF Report Generation
+        st.subheader('📄 Generate Report')
+        try:
+            pdf_buffer = generate_pdf_report(parsed_data, code_input)
+            if pdf_buffer:
+                st.download_button(
+                    label="📥 Download PDF Report",
+                    data=pdf_buffer.getvalue(),
+                    file_name=f"memsafe_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    type="primary"
+                )
+                st.success("✅ PDF report ready for download!")
+        except Exception as e:
+            st.warning(f"⚠️ PDF generation failed: {str(e)}")
+            st.info("The report will still be available in the UI above.")
 
 # Footer
 st.markdown("---")
